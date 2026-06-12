@@ -13,12 +13,9 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- 1. INISIALISASI SESSION STATE (Untuk Otomatisasi Slider) ---
-if 'prec_h1' not in st.session_state: st.session_state.prec_h1 = 0.0
-if 'gwettop_h0' not in st.session_state: st.session_state.gwettop_h0 = 0.5
-if 'gwettop_h1' not in st.session_state: st.session_state.gwettop_h1 = 0.5
-if 'gwetprof_h0' not in st.session_state: st.session_state.gwetprof_h0 = 0.5
-if 'gwetprof_h1' not in st.session_state: st.session_state.gwetprof_h1 = 0.5
+# --- 1. INISIALISASI SESSION STATE ---
+if 'api_forecast' not in st.session_state: st.session_state.api_forecast = None
+if 'mode_manual' not in st.session_state: st.session_state.mode_manual = False
 
 # --- 2. MEMUAT MODEL DAN SCALER ---
 @st.cache_resource
@@ -56,22 +53,69 @@ data_kecamatan = {
     "Tarumajaya": {"lat": -6.1153, "lon": 106.9881, "elevasi": 2.0, "built_up": 0.40, "luas_risiko": 410.1, "jiwa_terpapar": 9500}
 }
 
-# --- 4. FUNGSI PENARIK DATA API (OPEN-METEO) ---
-def fetch_weather_api(lat, lon):
+# --- 4. FUNGSI API 7 HARI KE DEPAN (One-Week Forecast) ---
+def fetch_weather_forecast(lat, lon):
     try:
-        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=precipitation_sum&hourly=soil_moisture_0_to_7cm,soil_moisture_28_to_100cm&timezone=Asia%2FJakarta&past_days=1&forecast_days=1"
+        # Menarik data H-1 (past_days=1) dan 7 hari ke depan (forecast_days=7)
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=precipitation_sum&hourly=soil_moisture_0_to_7cm,soil_moisture_28_to_100cm&timezone=Asia%2FJakarta&past_days=1&forecast_days=7"
         response = requests.get(url)
         data = response.json()
         
-        prec_kemarin = data['daily']['precipitation_sum'][0]
-        sm_top_h1 = sum(data['hourly']['soil_moisture_0_to_7cm'][0:24]) / 24 * 2
-        sm_top_h0 = sum(data['hourly']['soil_moisture_0_to_7cm'][24:48]) / 24 * 2
-        sm_prof_h1 = sum(data['hourly']['soil_moisture_28_to_100cm'][0:24]) / 24 * 2
-        sm_prof_h0 = sum(data['hourly']['soil_moisture_28_to_100cm'][24:48]) / 24 * 2
+        forecast_list = []
         
-        return prec_kemarin, min(sm_top_h1, 1.0), min(sm_top_h0, 1.0), min(sm_prof_h1, 1.0), min(sm_prof_h0, 1.0)
+        # Looping untuk 7 Hari (Indeks 1 sampai 7)
+        for i in range(1, 8):
+            prec_h1 = data['daily']['precipitation_sum'][i-1] 
+            
+            sm_top_h1 = sum(data['hourly']['soil_moisture_0_to_7cm'][(i-1)*24 : i*24]) / 24 * 2
+            sm_top_h0 = sum(data['hourly']['soil_moisture_0_to_7cm'][i*24 : (i+1)*24]) / 24 * 2
+            sm_prof_h1 = sum(data['hourly']['soil_moisture_28_to_100cm'][(i-1)*24 : i*24]) / 24 * 2
+            sm_prof_h0 = sum(data['hourly']['soil_moisture_28_to_100cm'][i*24 : (i+1)*24]) / 24 * 2
+            
+            forecast_list.append({
+                'hari_ke': i,
+                'prec_h1': prec_h1,
+                'gwettop_h1': min(sm_top_h1, 1.0),
+                'gwettop_h0': min(sm_top_h0, 1.0),
+                'gwetprof_h1': min(sm_prof_h1, 1.0),
+                'gwetprof_h0': min(sm_prof_h0, 1.0)
+            })
+        return forecast_list
     except Exception as e:
         return None
+
+# --- FUNGSI PREDIKSI UTAMA ---
+def jalankan_prediksi(data_cuaca_dict, geo_data):
+    data_mentah = pd.DataFrame({
+        'PRECTOTCORR': [0.0], 
+        'GWETTOP': [data_cuaca_dict['gwettop_h0']],
+        'GWETPROF': [data_cuaca_dict['gwetprof_h0']],
+        'PRECTOTCORR_H_1': [data_cuaca_dict['prec_h1']],
+        'GWETTOP_H_1': [data_cuaca_dict['gwettop_h1']],
+        'GWETPROF_H_1': [data_cuaca_dict['gwetprof_h1']]
+    })
+    
+    kolom_dinamis = ['PRECTOTCORR', 'GWETTOP', 'GWETPROF', 'PRECTOTCORR_H_1', 'GWETTOP_H_1', 'GWETPROF_H_1']
+    data_scaled = data_mentah.copy()
+    data_scaled[kolom_dinamis] = scaler.transform(data_mentah[kolom_dinamis])
+    
+    X_input = pd.DataFrame({
+        'GWETTOP': data_scaled['GWETTOP'],
+        'GWETPROF': data_scaled['GWETPROF'],
+        'PRECTOTCORR_H_1': data_scaled['PRECTOTCORR_H_1'],
+        'GWETTOP_H_1': data_scaled['GWETTOP_H_1'],
+        'GWETPROF_H_1': data_scaled['GWETPROF_H_1'],
+        'AVG_Luas_Risiko': [geo_data['luas_risiko']],
+        'AVG_Jiwa_Terpapar': [geo_data['jiwa_terpapar']],
+        'AVG_ELEVATION': [geo_data['elevasi']],
+        'PERC_BUILT_UP': [geo_data['built_up']]
+    })
+    
+    X_input = X_input[rf_model.feature_names_in_]
+    hasil_prediksi = rf_model.predict(X_input)[0]
+    probabilitas = rf_model.predict_proba(X_input)[0][1] * 100
+    
+    return hasil_prediksi, probabilitas
 
 # --- 5. HEADER APLIKASI ---
 st.title("🌊 Dashboard Spasial & Peringatan Dini Banjir")
@@ -79,36 +123,24 @@ st.subheader("Sistem Prediksi Berbasis Machine Learning - Kabupaten Bekasi")
 st.markdown("---")
 
 # --- 6. PEMBAGIAN LAYOUT ---
-kolom_kiri, kolom_kanan = st.columns([6, 4])
+kolom_kiri, kolom_kanan = st.columns([4, 6])
 
 with kolom_kiri:
-    st.write("### 📍 Pilih Wilayah & Input Parameter Cuaca")
+    st.write("### 📍 Pilih Wilayah Kabupaten Bekasi")
     pilihan_kec = st.selectbox("Pilih Kecamatan:", list(data_kecamatan.keys()))
     geo_data = data_kecamatan[pilihan_kec]
     
-    st.info("💡 **Tips:** Klik tombol di bawah ini untuk menarik data cuaca aktual hari ini secara otomatis dari satelit.")
-    if st.button("📡 Tarik Data Cuaca Otomatis (Live API)", use_container_width=True):
-        with st.spinner('Menghubungkan ke satelit cuaca...'):
-            hasil_api = fetch_weather_api(geo_data["lat"], geo_data["lon"])
-            if hasil_api:
-                st.session_state.prec_h1 = float(hasil_api[0])
-                st.session_state.gwettop_h1 = float(hasil_api[1])
-                st.session_state.gwettop_h0 = float(hasil_api[2])
-                st.session_state.gwetprof_h1 = float(hasil_api[3])
-                st.session_state.gwetprof_h0 = float(hasil_api[4])
-                st.success(f"✅ Data cuaca terkini untuk {pilihan_kec} berhasil ditarik!")
+    # TOMBOL UTAMA (FITUR 7 HARI)
+    st.info("💡 **Rekomendasi:** Klik tombol di bawah untuk menarik data satelit dan memprediksi status banjir selama 1 minggu penuh ke depan.")
+    if st.button("📡 Tarik & Prediksi Cuaca 7 Hari (Otomatis)", use_container_width=True):
+        with st.spinner('Menghubungkan ke satelit cuaca Open-Meteo...'):
+            st.session_state.api_forecast = fetch_weather_forecast(geo_data["lat"], geo_data["lon"])
+            st.session_state.mode_manual = False
+            if st.session_state.api_forecast:
+                st.success(f"✅ Prakiraan cuaca 7 hari untuk {pilihan_kec} berhasil diproses!")
             else:
                 st.error("❌ Gagal menarik data. Periksa koneksi internetmu.")
     
-    col_cuaca1, col_cuaca2 = st.columns(2)
-    with col_cuaca1:
-        st.number_input("Curah Hujan Kemarin (mm)", min_value=0.0, max_value=300.0, step=1.0, key='prec_h1')
-        st.slider("Kelembaban Tanah Permukaan Hari Ini", 0.0, 1.0, key='gwettop_h0')
-    with col_cuaca2:
-        st.slider("Kelembaban Tanah Permukaan Kemarin", 0.0, 1.0, key='gwettop_h1')
-        st.slider("Kelembaban Tanah Profil Hari Ini", 0.0, 1.0, key='gwetprof_h0')
-        st.number_input("Kelembaban Tanah Profil Kemarin", 0.0, 1.0, key='gwetprof_h1', label_visibility="collapsed") 
-
     st.write("#### Visualisasi Lokasi Kecamatan:")
     peta = folium.Map(location=[geo_data["lat"], geo_data["lon"]], zoom_start=12)
     folium.Marker(
@@ -118,55 +150,47 @@ with kolom_kiri:
     st_folium(peta, width="100%", height=300, key=f"map_{pilihan_kec}")
 
 with kolom_kanan:
-    st.write("### 📊 Analisis & Hasil Prediksi")
-    st.info(f"**Karakteristik Fisik {pilihan_kec}:**\n* Rata-rata Elevasi: {geo_data['elevasi']} mdpl\n* Lahan Terbangun: {geo_data['built_up']*100}%\n* Luas Wilayah Risiko: {geo_data['luas_risiko']} Ha")
+    st.write("### 📊 Analisis & Hasil Prediksi (7 Hari)")
+    st.info(f"**Karakteristik Fisik {pilihan_kec}:** Elevasi {geo_data['elevasi']} mdpl | Lahan Terbangun {geo_data['built_up']*100}% | Wilayah Risiko {geo_data['luas_risiko']} Ha")
     
-    if st.button("🔍 Jalankan Simulasi Prediksi", use_container_width=True):
-        
-        data_mentah = pd.DataFrame({
-            'PRECTOTCORR': [0.0], 
-            'GWETTOP': [st.session_state.gwettop_h0],
-            'GWETPROF': [st.session_state.gwetprof_h0],
-            'PRECTOTCORR_H_1': [st.session_state.prec_h1],
-            'GWETTOP_H_1': [st.session_state.gwettop_h1],
-            'GWETPROF_H_1': [st.session_state.gwetprof_h1]
-        })
-        
-        kolom_dinamis = ['PRECTOTCORR', 'GWETTOP', 'GWETPROF', 'PRECTOTCORR_H_1', 'GWETTOP_H_1', 'GWETPROF_H_1']
-        data_scaled = data_mentah.copy()
-        data_scaled[kolom_dinamis] = scaler.transform(data_mentah[kolom_dinamis])
-        
-        X_input = pd.DataFrame({
-            'GWETTOP': data_scaled['GWETTOP'],
-            'GWETPROF': data_scaled['GWETPROF'],
-            'PRECTOTCORR_H_1': data_scaled['PRECTOTCORR_H_1'],
-            'GWETTOP_H_1': data_scaled['GWETTOP_H_1'],
-            'GWETPROF_H_1': data_scaled['GWETPROF_H_1'],
-            'AVG_Luas_Risiko': [geo_data['luas_risiko']],
-            'AVG_Jiwa_Terpapar': [geo_data['jiwa_terpapar']],
-            'AVG_ELEVATION': [geo_data['elevasi']],
-            'PERC_BUILT_UP': [geo_data['built_up']]
-        })
-        
-        X_input = X_input[rf_model.feature_names_in_]
-        
-        hasil_prediksi = rf_model.predict(X_input)[0]
-        probabilitas = rf_model.predict_proba(X_input)[0][1] * 100
-        
-        # MENDAPATKAN TANGGAL HARI INI (WIB)
+    # JIKA TOMBOL API SUDAH DITEKAN, MUNCULKAN TAB 7 HARI!
+    if st.session_state.api_forecast is not None and not st.session_state.mode_manual:
         waktu_wib = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
         nama_bulan = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
         nama_hari = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
         
-        hari_ini = nama_hari[waktu_wib.weekday()]
-        tanggal_format = f"{hari_ini}, {waktu_wib.day} {nama_bulan[waktu_wib.month - 1]} {waktu_wib.year}"
+        # Membuat 7 Tab yang membentang rapi
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+            "HARI INI", "BESOK", "LUSA", "HARI KE-4", "HARI KE-5", "HARI KE-6", "HARI KE-7"
+        ])
+        tabs = [tab1, tab2, tab3, tab4, tab5, tab6, tab7]
         
-        st.markdown(f"#### **Status Peringatan Dini ({tanggal_format}):**")
-        if hasil_prediksi == 1:
-            st.error(f"🚨 **SIAGA: POTENSI BANJIR**")
-            st.metric(label="Probabilitas Risiko", value=f"{probabilitas:.2f}%")
-            st.warning("Kombinasi saturasi tanah dan intensitas hujan memicu limpasan air yang tinggi.")
-        else:
-            st.success(f"✅ **AMAN: MINIM POTENSI BANJIR**")
-            st.metric(label="Probabilitas Risiko", value=f"{probabilitas:.2f}%")
-            st.info("Kapasitas tanah masih mampu menyerap curah hujan masa lalu dengan aman.")
+        for idx, (tab, data_cuaca) in enumerate(zip(tabs, st.session_state.api_forecast)):
+            with tab:
+                # Menghitung tanggal kalender
+                waktu_target = waktu_wib + datetime.timedelta(days=idx)
+                hari_target = nama_hari[waktu_target.weekday()]
+                tgl_format = f"{hari_target}, {waktu_target.day} {nama_bulan[waktu_target.month - 1]} {waktu_target.year}"
+                
+                st.write(f"**🗓️ Prakiraan: {tgl_format}**")
+                
+                # Menampilkan mini-dashboard parameter cuaca
+                col_a, col_b = st.columns(2)
+                col_a.metric("Curah Hujan Pemicu (H-1)", f"{data_cuaca['prec_h1']:.1f} mm")
+                col_b.metric("Saturasi Tanah Terprediksi", f"{data_cuaca['gwettop_h0']:.2f}")
+                
+                # Memasukkan angka cuaca ke dalam mesin Machine Learning
+                hasil, prob = jalankan_prediksi(data_cuaca, geo_data)
+                
+                st.markdown("#### **Status Peringatan Dini:**")
+                if hasil == 1:
+                    st.error(f"🚨 **SIAGA: POTENSI BANJIR**")
+                    st.metric(label="Probabilitas Risiko Terjadi", value=f"{prob:.2f}%")
+                    st.warning("Kombinasi saturasi tanah dan prakiraan intensitas hujan berpotensi memicu limpasan air tinggi.")
+                else:
+                    st.success(f"✅ **AMAN: MINIM POTENSI BANJIR**")
+                    st.metric(label="Probabilitas Risiko Terjadi", value=f"{prob:.2f}%")
+                    st.info("Kondisi tanah diperkirakan masih mampu menyerap curah hujan dengan aman pada hari ini.")
+                    
+    else:
+        st.write("👈 *Silakan klik tombol 'Tarik & Prediksi Cuaca 7 Hari (Otomatis)' di panel sebelah kiri untuk melihat prakiraan banjir 1 minggu penuh ke depan.*")
