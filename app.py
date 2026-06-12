@@ -3,6 +3,7 @@ import pandas as pd
 import joblib
 import folium
 import requests
+import datetime
 from streamlit_folium import st_folium
 
 # --- KONFIGURASI HALAMAN ---
@@ -58,16 +59,11 @@ data_kecamatan = {
 # --- 4. FUNGSI PENARIK DATA API (OPEN-METEO) ---
 def fetch_weather_api(lat, lon):
     try:
-        # Mengambil data curah hujan harian (kemarin) dan kelembaban tanah per jam
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=precipitation_sum&hourly=soil_moisture_0_to_7cm,soil_moisture_28_to_100cm&timezone=Asia%2FJakarta&past_days=1&forecast_days=1"
         response = requests.get(url)
         data = response.json()
         
-        # Mengekstrak Curah Hujan H-1 (Indeks 0 = kemarin)
         prec_kemarin = data['daily']['precipitation_sum'][0]
-        
-        # Mengekstrak rata-rata kelembaban tanah 
-        # Open-Meteo menggunakan skala volumetrik (0-0.5), kita kalikan 2 agar sesuai skala NASA (0-1)
         sm_top_h1 = sum(data['hourly']['soil_moisture_0_to_7cm'][0:24]) / 24 * 2
         sm_top_h0 = sum(data['hourly']['soil_moisture_0_to_7cm'][24:48]) / 24 * 2
         sm_prof_h1 = sum(data['hourly']['soil_moisture_28_to_100cm'][0:24]) / 24 * 2
@@ -82,7 +78,7 @@ st.title("🌊 Dashboard Spasial & Peringatan Dini Banjir")
 st.subheader("Sistem Prediksi Berbasis Machine Learning - Kabupaten Bekasi")
 st.markdown("---")
 
-# --- 6. PEMBAGIAN LAYOUT (Kiri: Input | Kanan: Hasil) ---
+# --- 6. PEMBAGIAN LAYOUT ---
 kolom_kiri, kolom_kanan = st.columns([6, 4])
 
 with kolom_kiri:
@@ -90,13 +86,11 @@ with kolom_kiri:
     pilihan_kec = st.selectbox("Pilih Kecamatan:", list(data_kecamatan.keys()))
     geo_data = data_kecamatan[pilihan_kec]
     
-    # TOMBOL SAKTI API
     st.info("💡 **Tips:** Klik tombol di bawah ini untuk menarik data cuaca aktual hari ini secara otomatis dari satelit.")
     if st.button("📡 Tarik Data Cuaca Otomatis (Live API)", use_container_width=True):
         with st.spinner('Menghubungkan ke satelit cuaca...'):
             hasil_api = fetch_weather_api(geo_data["lat"], geo_data["lon"])
             if hasil_api:
-                # Mengubah posisi slider secara otomatis
                 st.session_state.prec_h1 = float(hasil_api[0])
                 st.session_state.gwettop_h1 = float(hasil_api[1])
                 st.session_state.gwettop_h0 = float(hasil_api[2])
@@ -106,7 +100,6 @@ with kolom_kiri:
             else:
                 st.error("❌ Gagal menarik data. Periksa koneksi internetmu.")
     
-    # KOTAK INPUT (Terhubung dengan Session State)
     col_cuaca1, col_cuaca2 = st.columns(2)
     with col_cuaca1:
         st.number_input("Curah Hujan Kemarin (mm)", min_value=0.0, max_value=300.0, step=1.0, key='prec_h1')
@@ -114,10 +107,8 @@ with kolom_kiri:
     with col_cuaca2:
         st.slider("Kelembaban Tanah Permukaan Kemarin", 0.0, 1.0, key='gwettop_h1')
         st.slider("Kelembaban Tanah Profil Hari Ini", 0.0, 1.0, key='gwetprof_h0')
-        # Parameter tersembunyi pendukung profil H-1
         st.number_input("Kelembaban Tanah Profil Kemarin", 0.0, 1.0, key='gwetprof_h1', label_visibility="collapsed") 
 
-    # PETA FOLIUM
     st.write("#### Visualisasi Lokasi Kecamatan:")
     peta = folium.Map(location=[geo_data["lat"], geo_data["lon"]], zoom_start=12)
     folium.Marker(
@@ -132,7 +123,6 @@ with kolom_kanan:
     
     if st.button("🔍 Jalankan Simulasi Prediksi", use_container_width=True):
         
-        # a. Susun Data Input Mentah
         data_mentah = pd.DataFrame({
             'PRECTOTCORR': [0.0], 
             'GWETTOP': [st.session_state.gwettop_h0],
@@ -142,12 +132,10 @@ with kolom_kanan:
             'GWETPROF_H_1': [st.session_state.gwetprof_h1]
         })
         
-        # b. Normalisasi Scaler
         kolom_dinamis = ['PRECTOTCORR', 'GWETTOP', 'GWETPROF', 'PRECTOTCORR_H_1', 'GWETTOP_H_1', 'GWETPROF_H_1']
         data_scaled = data_mentah.copy()
         data_scaled[kolom_dinamis] = scaler.transform(data_mentah[kolom_dinamis])
         
-        # c. Integrasi Variabel Fisik Spasial
         X_input = pd.DataFrame({
             'GWETTOP': data_scaled['GWETTOP'],
             'GWETPROF': data_scaled['GWETPROF'],
@@ -162,12 +150,18 @@ with kolom_kanan:
         
         X_input = X_input[rf_model.feature_names_in_]
         
-        # d. Prediksi
         hasil_prediksi = rf_model.predict(X_input)[0]
         probabilitas = rf_model.predict_proba(X_input)[0][1] * 100
         
-        # e. Visualisasi Status
-        st.markdown("#### **Status Peringatan Dini:**")
+        # MENDAPATKAN TANGGAL HARI INI (WIB)
+        waktu_wib = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
+        nama_bulan = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
+        nama_hari = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
+        
+        hari_ini = nama_hari[waktu_wib.weekday()]
+        tanggal_format = f"{hari_ini}, {waktu_wib.day} {nama_bulan[waktu_wib.month - 1]} {waktu_wib.year}"
+        
+        st.markdown(f"#### **Status Peringatan Dini ({tanggal_format}):**")
         if hasil_prediksi == 1:
             st.error(f"🚨 **SIAGA: POTENSI BANJIR**")
             st.metric(label="Probabilitas Risiko", value=f"{probabilitas:.2f}%")
