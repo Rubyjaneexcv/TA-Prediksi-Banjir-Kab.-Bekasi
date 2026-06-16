@@ -6,13 +6,34 @@ import requests
 import datetime
 from streamlit_folium import st_folium
 
-# --- KONFIGURASI HALAMAN ---
-st.set_page_config(
-    page_title="Dashboard Prediksi Banjir Kab. Bekasi",
-    page_icon="🌊",
-    layout="wide"
+# Set konfigurasi halaman agar tampilan lebih luas
+st.set_page_config(page_title="Dashboard Banjir Bekasi", layout="wide")
+
+# --- 1. SUNTIK CSS KUSTOM (Mengecilkan Ukuran Header) ---
+st.markdown(
+    """
+    <style>
+    .judul-kustom {
+        font-size: 26px !important; 
+        font-weight: bold;
+        color: #2c3e50;
+        margin-bottom: 5px;
+        margin-top: -40px; /* Menarik konten lebih ke atas */
+    }
+    .sub-judul-kustom {
+        font-size: 16px !important;
+        color: #34495e;
+        margin-bottom: 20px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
 )
 
+# Render Header yang sudah dikecilkan ukurannya
+st.markdown('<p class="judul-kustom">🌊 Dashboard Spasial & Peringatan Dini Banjir</p>', unsafe_allow_html=True)
+st.markdown('<p class="sub-judul-kustom">Sistem Prediksi Berbasis Machine Learning - Kabupaten Bekasi</p>', unsafe_allow_html=True)
+st.markdown("---")
 # --- 1. INISIALISASI SESSION STATE ---
 if 'api_forecast' not in st.session_state: st.session_state.api_forecast = None
 if 'mode_manual' not in st.session_state: st.session_state.mode_manual = False
