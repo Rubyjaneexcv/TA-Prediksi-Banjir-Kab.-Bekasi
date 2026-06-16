@@ -9,29 +9,6 @@ from streamlit_folium import st_folium
 # Set konfigurasi halaman agar tampilan lebih luas
 st.set_page_config(page_title="Dashboard Banjir Bekasi", layout="wide")
 
-# --- 1. SUNTIK CSS KUSTOM (Mengecilkan Ukuran Header) ---
-st.markdown(
-    """
-    <style>
-    .judul-kustom {
-        font-size: 26px !important; 
-        font-weight: bold;
-        color: #2c3e50;
-        margin-bottom: 5px;
-        margin-top: -40px; /* Menarik konten lebih ke atas */
-    }
-    .sub-judul-kustom {
-        font-size: 16px !important;
-        color: #34495e;
-        margin-bottom: 20px;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
-
-st.markdown("---")
-
 # --- 1. INISIALISASI SESSION STATE ---
 if 'api_forecast' not in st.session_state: st.session_state.api_forecast = None
 if 'mode_manual' not in st.session_state: st.session_state.mode_manual = False
@@ -72,17 +49,14 @@ data_kecamatan = {
     "Tarumajaya": {"lat": -6.1153, "lon": 106.9881, "elevasi": 2.0, "built_up": 0.40, "luas_risiko": 410.1, "jiwa_terpapar": 9500}
 }
 
-# --- 4. FUNGSI API 7 HARI KE DEPAN (One-Week Forecast) ---
+# --- 4. FUNGSI API WEATHER FORECAST ---
 def fetch_weather_forecast(lat, lon):
     try:
-        # Menarik data H-1 (past_days=1) dan 7 hari ke depan (forecast_days=7)
         url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=precipitation_sum&hourly=soil_moisture_0_to_7cm,soil_moisture_28_to_100cm&timezone=Asia%2FJakarta&past_days=1&forecast_days=7"
         response = requests.get(url)
         data = response.json()
         
         forecast_list = []
-        
-        # Looping untuk 7 Hari (Indeks 1 sampai 7)
         for i in range(1, 8):
             prec_h1 = data['daily']['precipitation_sum'][i-1] 
             
@@ -103,7 +77,7 @@ def fetch_weather_forecast(lat, lon):
     except Exception as e:
         return None
 
-# --- FUNGSI PREDIKSI UTAMA ---
+# --- 5. FUNGSI INFERENSI PREDIKSI ---
 def jalankan_prediksi(data_cuaca_dict, geo_data):
     data_mentah = pd.DataFrame({
         'PRECTOTCORR': [0.0], 
@@ -136,12 +110,12 @@ def jalankan_prediksi(data_cuaca_dict, geo_data):
     
     return hasil_prediksi, probabilitas
 
-# --- 5. HEADER APLIKASI ---
+# --- 6. HEADER APLIKASI (Bawaan Streamlit) ---
 st.title("🌊 Dashboard Spasial & Peringatan Dini Banjir")
 st.subheader("Sistem Prediksi Berbasis Machine Learning - Kabupaten Bekasi")
 st.markdown("---")
 
-# --- 6. PEMBAGIAN LAYOUT ---
+# --- 7. TATA LETAK KOLOM TAMPILAN (LAYOUT WEB) ---
 kolom_kiri, kolom_kanan = st.columns([4, 6])
 
 with kolom_kiri:
@@ -149,7 +123,6 @@ with kolom_kiri:
     pilihan_kec = st.selectbox("Pilih Kecamatan:", list(data_kecamatan.keys()))
     geo_data = data_kecamatan[pilihan_kec]
     
-    # TOMBOL UTAMA (FITUR 7 HARI)
     st.info("💡 **Rekomendasi:** Klik tombol di bawah untuk menarik data satelit dan memprediksi status banjir selama 1 minggu penuh ke depan.")
     if st.button("📡 Tarik & Prediksi Cuaca 7 Hari (Otomatis)", use_container_width=True):
         with st.spinner('Menghubungkan ke satelit cuaca Open-Meteo...'):
@@ -172,13 +145,11 @@ with kolom_kanan:
     st.write("### 📊 Analisis & Hasil Prediksi (7 Hari)")
     st.info(f"**Karakteristik Fisik {pilihan_kec}:** Elevasi {geo_data['elevasi']} mdpl | Lahan Terbangun {geo_data['built_up']*100}% | Wilayah Risiko {geo_data['luas_risiko']} Ha")
     
-    # JIKA TOMBOL API SUDAH DITEKAN, MUNCULKAN TAB 7 HARI!
     if st.session_state.api_forecast is not None and not st.session_state.mode_manual:
         waktu_wib = datetime.datetime.utcnow() + datetime.timedelta(hours=7)
         nama_bulan = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
         nama_hari = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"]
         
-        # Membuat 7 Tab yang membentang rapi
         tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
             "HARI INI", "BESOK", "LUSA", "HARI KE-4", "HARI KE-5", "HARI KE-6", "HARI KE-7"
         ])
@@ -186,19 +157,16 @@ with kolom_kanan:
         
         for idx, (tab, data_cuaca) in enumerate(zip(tabs, st.session_state.api_forecast)):
             with tab:
-                # Menghitung tanggal kalender
                 waktu_target = waktu_wib + datetime.timedelta(days=idx)
                 hari_target = nama_hari[waktu_target.weekday()]
                 tgl_format = f"{hari_target}, {waktu_target.day} {nama_bulan[waktu_target.month - 1]} {waktu_target.year}"
                 
                 st.write(f"**🗓️ Prakiraan: {tgl_format}**")
                 
-                # Menampilkan mini-dashboard parameter cuaca
                 col_a, col_b = st.columns(2)
                 col_a.metric("Curah Hujan Pemicu (H-1)", f"{data_cuaca['prec_h1']:.1f} mm")
                 col_b.metric("Saturasi Tanah Terprediksi", f"{data_cuaca['gwettop_h0']:.2f}")
                 
-                # Memasukkan angka cuaca ke dalam mesin Machine Learning
                 hasil, prob = jalankan_prediksi(data_cuaca, geo_data)
                 
                 st.markdown("#### **Status Peringatan Dini:**")
