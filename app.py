@@ -30,10 +30,8 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Render Header yang sudah dikecilkan ukurannya
-st.markdown('<p class="judul-kustom">🌊 Dashboard Spasial & Peringatan Dini Banjir</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-judul-kustom">Sistem Prediksi Berbasis Machine Learning - Kabupaten Bekasi</p>', unsafe_allow_html=True)
 st.markdown("---")
+
 # --- 1. INISIALISASI SESSION STATE ---
 if 'api_forecast' not in st.session_state: st.session_state.api_forecast = None
 if 'mode_manual' not in st.session_state: st.session_state.mode_manual = False
